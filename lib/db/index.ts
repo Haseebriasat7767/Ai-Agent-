@@ -191,6 +191,19 @@ export async function ensureSchema(driver: SqlDriver): Promise<void> {
 }
 
 /**
+ * Set `REQUIRE_POSTGRES=true` on deployments whose filesystem is read-only and
+ * per-invocation (Vercel, containers without a volume). The SQLite fallback
+ * cannot survive there: writes fail against a read-only mount, and each new
+ * invocation would otherwise get its own empty database. When enabled, a
+ * missing or malformed `DATABASE_URL` fails loudly at first query instead of
+ * silently degrading.
+ */
+export function requirePostgres(): boolean {
+  const value = (process.env.REQUIRE_POSTGRES ?? "").trim().toLowerCase();
+  return value === "true" || value === "1" || value === "yes";
+}
+
+/**
  * Returns a driver for the configured datastore. When `DATABASE_URL` points at
  * Postgres we use it; otherwise the app runs on a local SQLite file at
  * `.data/haseeb-ai.db` so the product is fully usable in development.
@@ -199,6 +212,14 @@ export async function getDb(): Promise<SqlDriver> {
   if (!driverPromise) {
     const url = databaseUrl();
     const isPostgres = url.startsWith("postgres://") || url.startsWith("postgresql://");
+    if (!isPostgres && requirePostgres()) {
+      throw new DatabaseUnavailableError(
+        url
+          ? "DATABASE_URL is set but is not a PostgreSQL URL, and REQUIRE_POSTGRES is enabled."
+          : "DATABASE_URL is not set and REQUIRE_POSTGRES is enabled.",
+        "Set DATABASE_URL to a postgres:// URL (Neon, Supabase, Vercel Postgres…) or unset REQUIRE_POSTGRES to allow the local SQLite fallback.",
+      );
+    }
     driverPromise = (async () => {
       const driver = isPostgres ? await pgDriver() : await sqliteDriver();
       if (!schemaPromise) schemaPromise = ensureSchema(driver);
@@ -245,7 +266,7 @@ export async function dbHealth(): Promise<DbHealth> {
       label: "unavailable",
       detail: error instanceof Error ? error.message : String(error),
       error: error instanceof Error ? error.message : String(error),
-      hint: "Verify DATABASE_URL (or delete .data/ if the local SQLite file is corrupted).",
+      hint: error instanceof DatabaseUnavailableError ? error.hint : "Verify DATABASE_URL (or delete .data/ if the local SQLite file is corrupted).",
     };
   }
 }
