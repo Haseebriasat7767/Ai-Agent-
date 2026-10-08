@@ -144,22 +144,70 @@ private ranges and metadata endpoints.
 
 ## Deployment (GitHub → Vercel)
 
-1. Push this repo to GitHub, import it in Vercel.
-2. **Database:** create a Postgres instance (Neon, Supabase, Vercel Postgres…) and
-   set `DATABASE_URL`. Apply the schema once:
-   `psql "$DATABASE_URL" -f db/schema.sql` (or let the app create it on first boot).
-   Set `REQUIRE_POSTGRES=true` in production so a misconfigured URL fails loudly
-   instead of silently falling back to local SQLite.
-3. **Auth:** set `AUTH_SECRET` (32+ random chars), `OWNER_EMAIL`, optionally
-   `ALLOWED_EMAILS`.
-4. **AI:** set `AI_GATEWAY_API_KEY` — or deploy on Vercel and rely on Gateway OIDC.
-5. Add whichever of search / email / WhatsApp / calendar / screenshot providers
+This repo deploys as **one Vercel project running one Next.js app** — no
+`services` block, no service bindings. There is a single deployable unit
+(`app/` holds both the pages and the API routes) and every browser call is a
+same-origin relative request (`fetch("/api/…")`), so there is nothing to route
+between and no internal URL to inject.
+
+`vercel.json` in the repo root is intentionally minimal:
+
+```json
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "installCommand": "npm ci"
+}
+```
+
+`framework` pins detection (so the project can never be misread as something
+else) and `npm ci` installs strictly from the committed `package-lock.json`.
+Everything else stays at its default on purpose: the security headers live in
+`next.config.ts`, and per-route timeouts live in the route files
+(`export const maxDuration`, up to 300s — inside Hobby and Pro limits).
+
+1. Push this repo to GitHub and import it in Vercel. Leave the framework preset
+   as detected (Next.js); do not set it to "Services".
+2. **Environment variables:** work through `.env.vercel.example` — it is a
+   turnkey, per-row template for Vercel → Project → Settings → Environment
+   Variables. `.env.example` remains the annotated reference for local dev.
+3. **Database:** create a Postgres instance (Neon, Supabase, Vercel Postgres…)
+   and set `DATABASE_URL`. Apply the schema once:
+   `psql "$DATABASE_URL" -f db/schema.sql` (or let the app create it on first
+   boot). **Also set `REQUIRE_POSTGRES=true`** in production: the filesystem
+   there is read-only and per-invocation, so the local SQLite fallback cannot
+   work. With the flag set, a missing or malformed `DATABASE_URL` fails loudly
+   at first query (`DatabaseUnavailableError`, surfaced by `/api/health` and the
+   login screen) instead of degrading silently.
+4. **Auth:** set `AUTH_SECRET` (32+ random chars), `OWNER_EMAIL`, optionally
+   `ALLOWED_EMAILS`. Set `APP_URL` to the public origin so links in emails and
+   exports are absolute and correct.
+5. **AI:** set `AI_GATEWAY_API_KEY` — or deploy on Vercel and rely on Gateway OIDC.
+6. Add whichever of search / email / WhatsApp / calendar / screenshot providers
    you want live. Unset ones simply report as unavailable.
-6. **Storage:** `FILE_STORAGE=vercel` + `BLOB_READ_WRITE_TOKEN` for durable uploads
-   on serverless; local disk otherwise.
+7. **Storage:** `FILE_STORAGE=vercel` + `BLOB_READ_WRITE_TOKEN` for durable uploads
+   on serverless; local disk otherwise (development only — disk does not persist
+   between Vercel invocations).
 
 `.env.example` documents every variable with links to where to get the key.
 Never commit `.env.local` — it is gitignored, as is `.data/`.
+
+### If you later split this into multiple services
+
+Vercel Services let one project hold several independently built units. It only
+kicks in when **both** conditions are true: `vercel.json` has a top-level
+`services` key **and** the project's framework preset is set to **Services** in
+the dashboard — otherwise the key is ignored and Vercel falls back to normal
+framework detection. Two things to know before going there:
+
+- Build and runtime keys (`framework`, `buildCommand`, `installCommand`,
+  `functions`, `outputDirectory`, …) are **not valid at the top level** in
+  services mode; they must move into the service they belong to. Public routing
+  keys (`rewrites`, `redirects`, `headers`) stay at the top level.
+- Bindings resolve at runtime in functions only — **not during builds and not in
+  middleware** — so browser code can never use them. Any path the client fetches
+  still needs a public rewrite, as the current relative `fetch("/api/…")` calls
+  already assume.
 
 ---
 

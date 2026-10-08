@@ -1,5 +1,7 @@
 import type { NextConfig } from "next";
 
+const isProduction = process.env.NODE_ENV === "production";
+
 const config: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
@@ -15,7 +17,11 @@ const config: NextConfig = {
         source: "/(.*)",
         headers: [
           { key: "X-Content-Type-Options", value: "nosniff" },
-          { key: "X-Frame-Options", value: "DENY" },
+          // Production denies framing outright (clickjacking protection — see
+          // the security posture section of the README). In development the app
+          // is rendered inside the sandbox's preview frame, so the header is
+          // omitted there; the production behaviour above is unchanged.
+          ...(isProduction ? [{ key: "X-Frame-Options", value: "DENY" }] : []),
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
           {
